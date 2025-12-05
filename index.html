@@ -3,386 +3,413 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pro Hand Steering Car Game</title>
+    <title>Car Controls Game Model by Woyrix</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- MediaPipe Hands & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
     <style>
-        body { margin: 0; overflow: hidden; background-color: #222; font-family: 'Segoe UI', sans-serif; }
-        
-        /* Dashboard UI */
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', Courier, monospace; }
+        #game-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+        #camera-feed {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 200px;
+            height: 150px;
+            border: 2px solid #00ffcc;
+            border-radius: 10px;
+            transform: scaleX(-1); /* Mirror effect */
+            z-index: 10;
+            opacity: 0.8;
+            background: #000;
+        }
         #ui-layer {
             position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             pointer-events: none;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+            z-index: 5;
         }
-
-        #webcam-container {
-            position: absolute;
-            top: 20px; left: 20px;
-            border: 4px solid #444;
-            border-radius: 12px;
-            overflow: hidden;
-            width: 240px; height: 180px;
-            background: black;
-            box-shadow: 0 0 20px rgba(0,0,0,0.5);
-            z-index: 10;
-        }
-
-        #webcam {
-            width: 100%; height: 100%;
-            transform: scaleX(-1); /* Mirror effect */
-            object-fit: cover;
-        }
-
-        #dashboard {
-            position: absolute;
-            bottom: 20px; left: 50%;
-            transform: translateX(-50%);
-            background: linear-gradient(90deg, rgba(0,0,0,0.8), rgba(20,20,20,0.9));
-            padding: 15px 40px;
-            border-radius: 50px;
-            border: 2px solid #555;
-            text-align: center;
+        .hud-text {
             color: #00ffcc;
+            text-shadow: 0 0 10px #00ffcc;
             font-size: 24px;
             font-weight: bold;
-            box-shadow: 0 0 15px rgba(0, 255, 204, 0.2);
         }
-
-        #status-msg { font-size: 16px; color: #aaa; margin-top: 5px; }
-
-        .loading {
-            position: absolute; top: 50%; left: 50%;
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
             transform: translate(-50%, -50%);
-            color: white; font-size: 24px;
-            background: rgba(0,0,0,0.9); padding: 30px;
-            border-radius: 15px; text-align: center;
+            color: white;
+            font-size: 2rem;
+            text-align: center;
+            background: rgba(0,0,0,0.8);
+            padding: 20px;
+            border-radius: 10px;
+            border: 2px solid #00ffcc;
+            z-index: 20;
         }
+        .btn {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+            padding: 10px 30px;
+            font-size: 1.5rem;
+            cursor: pointer;
+            margin-top: 20px;
+            font-weight: bold;
+            border-radius: 5px;
+            pointer-events: auto;
+        }
+        .btn:hover { background: #fff; }
     </style>
 </head>
 <body>
 
+    <!-- Camera Feed -->
+    <video id="camera-feed" playsinline></video>
+
+    <!-- 3D Container -->
+    <div id="game-container"></div>
+
+    <!-- Loading Screen -->
+    <div id="loading">
+        <h1>Hand Car Controls</h1>
+        <p>by WOYRIX </p>
+        <p class="text-sm text-gray-300">Allow Camera access when asked.</p>
+        <button id="start-btn" class="btn" style="display:none;">START ENGINE</button>
+    </div>
+
+    <!-- UI Overlay -->
     <div id="ui-layer">
-        <div id="webcam-container">
-            <video id="webcam" autoplay playsinline></video>
+        <div class="flex justify-between w-full">
+            <div class="hud-text">DISTANCE: <span id="score">0</span> m</div>
+            <div class="hud-text">SPEED: <span id="speed-meter">0</span> km/h</div>
         </div>
-        <div id="dashboard">
-            <div id="speed-meter">0 km/h</div>
-            <div id="status-msg">Loading AI...</div>
+        <div class="text-center">
+            <div class="hud-text" style="font-size: 16px; color: rgba(255,255,255,0.7);">
+                Use RIGHT HAND<br>
+                Move Left/Right to Steer<br>
+                Open Fingers = accelerate | Pinch = BRAKE
+            </div>
         </div>
     </div>
 
-    <div id="loading-msg" class="loading">
-        Initializing 3D Engine & AI...<br>
-        <span style="font-size:16px; color:#ccc">Please allow camera access.</span>
-    </div>
+    <script>
+        const videoElement = document.getElementById('camera-feed');
+        const loadingScreen = document.getElementById('loading');
+        const startBtn = document.getElementById('start-btn');
+        const scoreEl = document.getElementById('score');
+        const speedEl = document.getElementById('speed-meter');
 
-    <script type="module">
-        import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
-        import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0';
-
-        // --- GAME VARIABLES ---
-        let scene, camera, renderer;
-        let carContainer, carBody, wheelFL, wheelFR, wheelBL, wheelBR;
-        let speed = 0;
-        let maxSpeed = 0.35; // Slower, more realistic
-        let steeringAngle = 0;
-        let carRotation = 0;
+        // Game State
+        let gameRunning = false;
+        let score = 0;
+        let speed = 0; 
+        let maxSpeed = 2.0; 
         
-        // --- SETUP THREE.JS ---
-        function initThreeJS() {
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0xa0a0a0);
-            scene.fog = new THREE.Fog(0xa0a0a0, 20, 80);
+        // Hand Inputs
+        let handSteering = 0.5; // 0 (left) to 1 (right)
+        let handThrottle = 0;   // 0 (pinch) to 1 (open)
 
-            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // Three.js Globals
+        let scene, camera, renderer;
+        let roadMesh, carGroup;
+        let wheels = [];
+        let headlightTarget;
+
+        // --- THREE.JS SETUP ---
+
+        function init3D() {
+            const container = document.getElementById('game-container');
             
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+            scene.fog = new THREE.FogExp2(0x050505, 0.02);
+
+            // Camera - Positioned BEHIND the car (Positive Z)
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 2.5, 6); // Slightly lower and closer for chase view
+
+            // Renderer
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.shadowMap.enabled = true;
-            document.body.appendChild(renderer.domElement);
+            container.appendChild(renderer.domElement);
 
             // Lights
-            const hemiLight = new THREE.HemiLight(0xffffff, 0x444444);
-            hemiLight.position.set(0, 20, 0);
-            scene.add(hemiLight);
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+            scene.add(ambientLight);
 
-            const dirLight = new THREE.DirectionalLight(0xffffff);
-            dirLight.position.set(-10, 20, 10); // Sun position
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 5);
             dirLight.castShadow = true;
-            dirLight.shadow.camera.top = 20;
-            dirLight.shadow.camera.bottom = -20;
-            dirLight.shadow.camera.left = -20;
-            dirLight.shadow.camera.right = 20;
             scene.add(dirLight);
 
-            // Ground
-            const mesh = new THREE.Mesh(
-                new THREE.PlaneGeometry(500, 500),
-                new THREE.MeshPhongMaterial({ color: 0x333333, depthWrite: false })
-            );
-            mesh.rotation.x = - Math.PI / 2;
-            mesh.receiveShadow = true;
-            scene.add(mesh);
+            // --- OBJECTS ---
 
-            // Grid
-            const grid = new THREE.GridHelper(500, 100, 0x000000, 0x555555);
-            grid.material.opacity = 0.2;
-            grid.material.transparent = true;
+            // 1. Endless Road
+            const roadGeo = new THREE.PlaneGeometry(20, 400);
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 512;
+            const context = canvas.getContext('2d');
+            
+            context.fillStyle = '#222';
+            context.fillRect(0, 0, 512, 512);
+            context.fillStyle = '#00ffcc'; 
+            context.fillRect(0, 0, 20, 512);
+            context.fillRect(492, 0, 20, 512);
+            context.fillStyle = '#ffffff';
+            context.fillRect(246, 0, 20, 256); 
+
+            const roadTexture = new THREE.CanvasTexture(canvas);
+            roadTexture.wrapS = THREE.RepeatWrapping;
+            roadTexture.wrapT = THREE.RepeatWrapping;
+            roadTexture.repeat.set(1, 20);
+            
+            const roadMat = new THREE.MeshStandardMaterial({ 
+                map: roadTexture, 
+                roughness: 0.8 
+            });
+            
+            roadMesh = new THREE.Mesh(roadGeo, roadMat);
+            roadMesh.rotation.x = -Math.PI / 2;
+            roadMesh.receiveShadow = true;
+            scene.add(roadMesh);
+
+            // 2. The Player Car
+            carGroup = new THREE.Group();
+            
+            // Car Body - Main Chassis
+            const bodyGeo = new THREE.BoxGeometry(1.2, 0.5, 2.5);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2, metalness: 0.8 });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 0.5;
+            body.castShadow = true;
+            carGroup.add(body);
+
+            // Car Cabin - Shifted BACK (+Z)
+            const topGeo = new THREE.BoxGeometry(1.0, 0.4, 1.0);
+            const topMat = new THREE.MeshStandardMaterial({ color: 0x00ffcc, emissive: 0x002222 }); 
+            const top = new THREE.Mesh(topGeo, topMat);
+            top.position.y = 0.9;
+            top.position.z = 0.3; // Shifted back so front is long
+            carGroup.add(top);
+
+            // Wheels
+            const wheelGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.2, 16);
+            const wheelMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            
+            const positions = [
+                { x: -0.7, z: 0.8 }, { x: 0.7, z: 0.8 }, // Back wheels
+                { x: -0.7, z: -0.8 }, { x: 0.7, z: -0.8 } // Front wheels
+            ];
+
+            positions.forEach(pos => {
+                const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+                wheel.rotation.z = Math.PI / 2;
+                wheel.position.set(pos.x, 0.3, pos.z);
+                wheels.push(wheel);
+                carGroup.add(wheel);
+            });
+
+            // TAIL LIGHTS (Red) - At the Back (+Z)
+            const tailLightGeo = new THREE.BoxGeometry(0.25, 0.1, 0.1);
+            const tailLightMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            
+            const tl1 = new THREE.Mesh(tailLightGeo, tailLightMat);
+            tl1.position.set(-0.4, 0.5, 1.25);
+            carGroup.add(tl1);
+
+            const tl2 = new THREE.Mesh(tailLightGeo, tailLightMat);
+            tl2.position.set(0.4, 0.5, 1.25);
+            carGroup.add(tl2);
+
+            // HEADLIGHTS (White) - At the Front (-Z)
+            const headLightGeo = new THREE.BoxGeometry(0.2, 0.1, 0.1);
+            const headLightMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            
+            const hl1 = new THREE.Mesh(headLightGeo, headLightMat);
+            hl1.position.set(-0.4, 0.4, -1.25);
+            carGroup.add(hl1);
+
+            const hl2 = new THREE.Mesh(headLightGeo, headLightMat);
+            hl2.position.set(0.4, 0.4, -1.25);
+            carGroup.add(hl2);
+
+            // Real Light Beams
+            headlightTarget = new THREE.Object3D();
+            headlightTarget.position.set(0, 0, -10); // Far ahead
+            carGroup.add(headlightTarget);
+
+            const spotL = new THREE.SpotLight(0xffffff, 2);
+            spotL.angle = Math.PI / 6;
+            spotL.penumbra = 0.5;
+            spotL.distance = 20;
+            spotL.position.set(-0.4, 0.5, -1.2);
+            spotL.target = headlightTarget;
+            carGroup.add(spotL);
+
+            const spotR = new THREE.SpotLight(0xffffff, 2);
+            spotR.angle = Math.PI / 6;
+            spotR.penumbra = 0.5;
+            spotR.distance = 20;
+            spotR.position.set(0.4, 0.5, -1.2);
+            spotR.target = headlightTarget;
+            carGroup.add(spotR);
+
+            scene.add(carGroup);
+
+            // Environment Grid
+            const grid = new THREE.GridHelper(200, 50, 0xff0055, 0x110011);
+            grid.position.y = -0.1;
             scene.add(grid);
 
-            createCar();
-            createMapElements();
+            // Animation Loop
+            animate();
         }
 
-        function createCar() {
-            carContainer = new THREE.Group();
-
-            // 1. Car Body (Red Sporty Shape)
-            const bodyGeo = new THREE.BoxGeometry(1.2, 0.5, 2.5);
-            const bodyMat = new THREE.MeshPhongMaterial({ color: 0xff2222 });
-            carBody = new THREE.Mesh(bodyGeo, bodyMat);
-            carBody.position.y = 0.5;
-            carBody.castShadow = true;
-            carContainer.add(carBody);
-
-            // Cabin (Top)
-            const cabinGeo = new THREE.BoxGeometry(1, 0.4, 1.2);
-            const cabinMat = new THREE.MeshPhongMaterial({ color: 0x222222 }); // Dark windows
-            const cabin = new THREE.Mesh(cabinGeo, cabinMat);
-            cabin.position.set(0, 0.9, -0.2);
-            carContainer.add(cabin);
-
-            // 2. Wheels Function
-            function makeWheel() {
-                const geometry = new THREE.CylinderGeometry(0.35, 0.35, 0.3, 32);
-                const material = new THREE.MeshPhongMaterial({ color: 0x111111 });
-                const wheel = new THREE.Mesh(geometry, material);
-                wheel.rotation.z = Math.PI / 2; // Rotate to stand up
-                wheel.castShadow = true;
-                return wheel;
-            }
-
-            // Create 4 Wheels
-            // Note: We put wheels inside "Pivot" groups for steering rotation
-            
-            // Front Left
-            wheelFL = makeWheel();
-            const pivotFL = new THREE.Group();
-            pivotFL.position.set(-0.7, 0.35, -0.9);
-            pivotFL.add(wheelFL);
-            carContainer.add(pivotFL);
-            wheelFL.parentGroup = pivotFL; // Reference for steering
-
-            // Front Right
-            wheelFR = makeWheel();
-            const pivotFR = new THREE.Group();
-            pivotFR.position.set(0.7, 0.35, -0.9);
-            pivotFR.add(wheelFR);
-            carContainer.add(pivotFR);
-            wheelFR.parentGroup = pivotFR;
-
-            // Back Wheels (Fixed)
-            wheelBL = makeWheel();
-            wheelBL.position.set(-0.7, 0.35, 0.9);
-            carContainer.add(wheelBL);
-
-            wheelBR = makeWheel();
-            wheelBR.position.set(0.7, 0.35, 0.9);
-            carContainer.add(wheelBR);
-
-            scene.add(carContainer);
+        function resize() {
+            if (!camera || !renderer) return;
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
         }
+        window.addEventListener('resize', resize);
 
-        function createMapElements() {
-            const geometry = new THREE.BoxGeometry(2, 6, 2);
-            const material = new THREE.MeshPhongMaterial({ color: 0x445566 });
-            
-            // Random blocks
-            for(let i=0; i<30; i++) {
-                const block = new THREE.Mesh(geometry, material);
-                block.position.x = (Math.random() - 0.5) * 100;
-                block.position.z = (Math.random() - 0.5) * 100;
-                
-                // Don't spawn on top of car
-                if(Math.abs(block.position.x) < 5 && Math.abs(block.position.z) < 5) continue;
-                
-                block.position.y = 3;
-                block.castShadow = true;
-                block.receiveShadow = true;
-                scene.add(block);
-            }
-        }
-
-        // --- HAND TRACKING SETUP ---
-        let handLandmarker;
-        const video = document.getElementById('webcam');
-        const statusMsg = document.getElementById('status-msg');
-        const speedDisplay = document.getElementById('speed-meter');
-        const loadingMsg = document.getElementById('loading-msg');
-
-        async function initHandTracking() {
-            const vision = await FilesetResolver.forVisionTasks(
-                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-            );
-            
-            handLandmarker = await HandLandmarker.createFromOptions(vision, {
-                baseOptions: {
-                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
-                    delegate: "GPU"
-                },
-                runningMode: "VIDEO",
-                numHands: 2 // Detect 2 hands for steering wheel
-            });
-
-            startWebcam();
-        }
-
-        function startWebcam() {
-            navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
-                video.srcObject = stream;
-                video.addEventListener("loadeddata", predictWebcam);
-                loadingMsg.style.display = 'none';
-                statusMsg.innerText = "Show BOTH hands to steer!";
-            });
-        }
-
-        let lastVideoTime = -1;
-        async function predictWebcam() {
-            if (video.currentTime !== lastVideoTime) {
-                lastVideoTime = video.currentTime;
-                let startTimeMs = performance.now();
-                if (handLandmarker) {
-                    const result = handLandmarker.detectForVideo(video, startTimeMs);
-                    processControls(result);
-                }
-            }
-            requestAnimationFrame(predictWebcam);
-        }
-
-        // --- LOGIC: 2 HAND STEERING ---
-        function processControls(result) {
-            if (result.landmarks && result.landmarks.length === 2) {
-                // We have 2 hands!
-                const hand1 = result.landmarks[0][0]; // Wrist of hand 1
-                const hand2 = result.landmarks[1][0]; // Wrist of hand 2
-                
-                // Identify Left and Right hand (Screen space x: 0 is left, 1 is right)
-                // Note: Webcam is mirrored in CSS, but landmarks are original.
-                // Let's just grab X coords.
-                let leftHand, rightHand;
-                if (hand1.x < hand2.x) {
-                    leftHand = hand1; rightHand = hand2;
-                } else {
-                    leftHand = hand2; rightHand = hand1;
-                }
-
-                // 1. STEERING (Angle between wrists)
-                // Y increases downwards in screen space.
-                const dy = rightHand.y - leftHand.y;
-                const dx = rightHand.x - leftHand.x;
-                
-                // Calculate angle. Sensitivity adjusted by factor 2
-                const rawAngle = Math.atan2(dy, dx); 
-                // Normally horizontal is 0. If right hand goes down (y increases), angle is positive.
-                // We want: Right Hand Down = Turn Right.
-                steeringAngle = -rawAngle * 2.5; 
-                
-                // Limit steering
-                if (steeringAngle > 0.8) steeringAngle = 0.8;
-                if (steeringAngle < -0.8) steeringAngle = -0.8;
-
-
-                // 2. ACCELERATION (Check Index Fingers)
-                // Check if index finger tip is significantly higher than index MCP (Knuckle)
-                // Remember: Y is inverted (0 is top). So Tip < MCP means finger is UP.
-                
-                // Check Hand 1 Index
-                const h1IndexTip = result.landmarks[0][8].y;
-                const h1IndexMCP = result.landmarks[0][5].y;
-                const h1IsPointing = h1IndexTip < h1IndexMCP - 0.05; // -0.05 threshold
-
-                // Check Hand 2 Index
-                const h2IndexTip = result.landmarks[1][8].y;
-                const h2IndexMCP = result.landmarks[1][5].y;
-                const h2IsPointing = h2IndexTip < h2IndexMCP - 0.05;
-
-                if (h1IsPointing || h2IsPointing) {
-                    // Accelerate
-                    if (speed < maxSpeed) speed += 0.005;
-                    statusMsg.innerText = "🚀 GAS (Finger Up)";
-                    statusMsg.style.color = "#00ff00";
-                } else {
-                    // Coast / Brake naturally (Fists closed)
-                    if (speed > 0) speed -= 0.003;
-                    statusMsg.innerText = "✊ COASTING (Steering)";
-                    statusMsg.style.color = "#ffffff";
-                }
-
-                if (speed < 0) speed = 0;
-
-            } else if (result.landmarks && result.landmarks.length === 1) {
-                statusMsg.innerText = "⚠️ Need TWO Hands!";
-                statusMsg.style.color = "yellow";
-                // Slow down fast if hands lost
-                speed *= 0.95; 
-            } else {
-                statusMsg.innerText = "🔍 No Hands Detected";
-                speed *= 0.90;
-            }
-        }
-
-        // --- GAME LOOP ---
         function animate() {
             requestAnimationFrame(animate);
 
-            // 1. Move Car
-            // Apply steering rotation to the Car Container
-            // Only turn if moving (Realism) - or slightly if stationary for visual
-            if (Math.abs(speed) > 0.001) {
-                carRotation += steeringAngle * speed * 0.15;
+            if (!gameRunning) return;
+
+            // 1. Steering Physics
+            const targetX = (handSteering - 0.5) * 12; // Wider steering range
+            
+            // Move Car
+            carGroup.position.x += (targetX - carGroup.position.x) * 0.1;
+            // Banking (Tilt)
+            carGroup.rotation.z = -(targetX - carGroup.position.x) * 0.15;
+
+            // 2. Camera Chase Logic
+            camera.position.x += (carGroup.position.x - camera.position.x) * 0.08;
+            
+            camera.lookAt(
+                carGroup.position.x, 
+                carGroup.position.y, 
+                carGroup.position.z - 5 
+            );
+
+            // 3. Speed Physics
+            const targetSpeed = handThrottle * maxSpeed;
+            speed += (targetSpeed - speed) * 0.05;
+            if (speed < 0) speed = 0;
+
+            // 4. Road Movement (Corrected direction)
+            if (roadMesh) {
+                roadMesh.material.map.offset.y += speed * 0.02;
             }
-            
-            carContainer.rotation.y = carRotation;
-            carContainer.translateZ(-speed); // Move forward relative to rotation
 
-            // 2. Animate Wheels (Visual Only)
-            // Front wheels turn left/right
-            wheelFL.parentGroup.rotation.y = steeringAngle;
-            wheelFR.parentGroup.rotation.y = steeringAngle;
-            
-            // All wheels spin based on speed
-            const spinSpeed = speed * 5;
-            wheelFL.rotation.x += spinSpeed;
-            wheelFR.rotation.x += spinSpeed;
-            wheelBL.rotation.x += spinSpeed;
-            wheelBR.rotation.x += spinSpeed;
+            // 5. Wheel Rotation
+            wheels.forEach(w => {
+                w.rotation.x -= speed * 0.5;
+            });
 
-            // 3. Camera Follow (Third Person)
-            // Calculate ideal camera position relative to car
-            const offset = new THREE.Vector3(0, 4, 8); 
-            offset.applyMatrix4(carContainer.matrixWorld);
-            
-            camera.position.lerp(offset, 0.1); // Smooth follow
-            camera.lookAt(carContainer.position);
-
-            // UI Update
-            speedDisplay.innerText = Math.floor(speed * 300) + " km/h";
+            // 6. UI
+            score += Math.floor(speed * 10);
+            scoreEl.innerText = Math.floor(score / 100);
+            speedEl.innerText = Math.floor(speed * 100);
 
             renderer.render(scene, camera);
         }
 
-        // Resize
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+        // --- MEDIAPIPE LOGIC ---
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
         });
 
-        initThreeJS();
-        initHandTracking();
-        animate();
+        hands.onResults(onResults);
+
+        const cameraFeed = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+
+        function onResults(results) {
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                handThrottle = 0; 
+                return;
+            }
+
+            let playerHand = null;
+            if (results.multiHandedness) {
+                for (let i = 0; i < results.multiHandedness.length; i++) {
+                    if (results.multiHandedness[i].label === 'Right') {
+                        playerHand = results.multiHandLandmarks[i];
+                        break;
+                    }
+                }
+            }
+            if (!playerHand) playerHand = results.multiHandLandmarks[0];
+
+            if (playerHand) {
+                // Steering
+                const x = playerHand[9].x; 
+                handSteering = 1 - Math.min(Math.max((x - 0.2) / 0.6, 0), 1); 
+
+                // Speed
+                const p1 = playerHand[4];
+                const p2 = playerHand[8];
+                const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+                
+                const minD = 0.03;
+                const maxD = 0.15;
+                let nDist = (dist - minD) / (maxD - minD);
+                handThrottle = Math.min(Math.max(nDist, 0), 1);
+            }
+        }
+
+        startBtn.style.display = 'block';
+        startBtn.addEventListener('click', () => {
+            startBtn.innerText = "Ignition...";
+            init3D(); 
+            cameraFeed.start()
+                .then(() => {
+                    loadingScreen.style.display = 'none';
+                    gameRunning = true;
+                })
+                .catch(err => {
+                    alert("Camera Permission Denied!");
+                    console.error(err);
+                });
+        });
 
     </script>
 </body>

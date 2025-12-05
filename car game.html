@@ -1,0 +1,265 @@
+<meta name='viewport' content='width=device-width, initial-scale=1'/><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Gesture Car Game</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #333; font-family: sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        
+        /* Video ko corner mein dikhane ke liye aur mirror karne ke liye */
+        #webcam {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 200px;
+            height: 150px;
+            transform: scaleX(-1); 
+            border: 3px solid white;
+            border-radius: 10px;
+            z-index: 10;
+        }
+
+        #status {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: white;
+            background: rgba(0,0,0,0.7);
+            padding: 15px;
+            border-radius: 8px;
+            pointer-events: none;
+            font-size: 18px;
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            background: rgba(0,0,0,0.8);
+            padding: 20px;
+            border-radius: 10px;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+
+    <video id="webcam" autoplay playsinline></video>
+    
+    <div id="status">
+        Status: <span id="gesture-name">Loading AI...</span><br>
+        Speed: <span id="speed-display">0</span>
+    </div>
+
+    <div id="loading-msg" class="loading">Loading Camera & AI Model...<br>Please allow camera access.</div>
+
+    <script type="module">
+        import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
+        import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0';
+
+        // --- GAME VARIABLES ---
+        let car, ground, scene, camera, renderer;
+        let speed = 0;
+        let maxSpeed = 0.5;
+        let steeringAngle = 0;
+        let isAccelerating = false;
+        let isBraking = false;
+
+        // --- THREE.JS SETUP (Graphics) ---
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Sky blue
+            scene.fog = new THREE.Fog(0x87CEEB, 10, 50);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 3, 5);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 7);
+            scene.add(dirLight);
+
+            // Ground (Road area)
+            const groundGeo = new THREE.PlaneGeometry(200, 200);
+            const groundMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+            ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            scene.add(ground);
+
+            // Grid helper to see movement
+            const gridHelper = new THREE.GridHelper(200, 50);
+            scene.add(gridHelper);
+
+            // Simple Car (Red Box)
+            const carGeo = new THREE.BoxGeometry(1, 0.6, 2);
+            const carMat = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+            car = new THREE.Mesh(carGeo, carMat);
+            car.position.y = 0.3;
+            scene.add(car);
+        }
+
+        // --- MEDIAPIPE SETUP (Hand Tracking) ---
+        let handLandmarker;
+        const video = document.getElementById('webcam');
+        const gestureName = document.getElementById('gesture-name');
+        const loadingMsg = document.getElementById('loading-msg');
+
+        async function initHandTracking() {
+            const vision = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+            );
+            
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numHands: 1
+            });
+
+            startWebcam();
+        }
+
+        function startWebcam() {
+            navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
+                video.srcObject = stream;
+                video.addEventListener("loadeddata", predictWebcam);
+                loadingMsg.style.display = 'none';
+                gestureName.innerText = "Show Hand to Start";
+            });
+        }
+
+        let lastVideoTime = -1;
+        async function predictWebcam() {
+            if (video.currentTime !== lastVideoTime) {
+                lastVideoTime = video.currentTime;
+                const startTimeMs = performance.now();
+                
+                if (handLandmarker) {
+                    const result = handLandmarker.detectForVideo(video, startTimeMs);
+                    handleGestures(result);
+                }
+            }
+            requestAnimationFrame(predictWebcam);
+        }
+
+        // --- GESTURE LOGIC ---
+        function handleGestures(result) {
+            if (result.landmarks && result.landmarks.length > 0) {
+                const landmarks = result.landmarks[0]; // Get first hand
+
+                // 1. ROTATION (Steering)
+                // Wrist is point 0, Middle Finger MCP is point 9.
+                // Calculate angle between them to detect hand tilt.
+                const wrist = landmarks[0];
+                const middleMCP = landmarks[9];
+                
+                // Calculate difference in X coordinates (inverted because webcam is mirrored)
+                const dx = (middleMCP.x - wrist.x); 
+                
+                // Sensitivity multiplier
+                steeringAngle = dx * -3; // Negative to invert steering for natural feel
+                
+                // 2. ACCELERATE (Index Finger Pointing)
+                // Logic: Index tip (8) is high (low y value), others are curled.
+                const indexTip = landmarks[8];
+                const indexMCP = landmarks[5];
+                const middleTip = landmarks[12];
+                const middleMCP_ = landmarks[9];
+                const ringTip = landmarks[16];
+                const ringMCP = landmarks[13];
+
+                const isIndexExtended = indexTip.y < indexMCP.y; // Y is inverted in screen space usually
+                const isMiddleCurled = middleTip.y > middleMCP_.y;
+                const isRingCurled = ringTip.y > ringMCP.y;
+
+                // 3. BRAKE (Fist)
+                // Logic: All tips are below (screen space) their MCP joints (curled)
+                const isFist = !isIndexExtended && isMiddleCurled && isRingCurled;
+                
+                // Pure Pointing (Accelerate)
+                const isPointing = isIndexExtended && isMiddleCurled && isRingCurled;
+
+                if (isFist) {
+                    isBraking = true;
+                    isAccelerating = false;
+                    gestureName.innerText = "🛑 BRAKE (Fist)";
+                } else if (isPointing) {
+                    isAccelerating = true;
+                    isBraking = false;
+                    gestureName.innerText = "🚀 ACCELERATE (Index)";
+                } else {
+                    isAccelerating = false;
+                    isBraking = false;
+                    gestureName.innerText = "✋ Steering Only";
+                }
+
+            } else {
+                // No hand detected
+                isAccelerating = false;
+                isBraking = false;
+            }
+        }
+
+        // --- GAME LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Car Physics Logic
+            if (isAccelerating) {
+                if (speed < maxSpeed) speed += 0.01;
+            } else if (isBraking) {
+                if (speed > 0) speed -= 0.02;
+                if (speed < 0) speed = 0; // No reverse for now
+            } else {
+                // Friction (slow down naturally)
+                if (speed > 0) speed -= 0.005;
+                if (speed < 0) speed = 0;
+            }
+
+            // Update Car Rotation
+            // Only rotate if moving or check simple steering
+            car.rotation.y += steeringAngle * speed * 0.1;
+
+            // Move Car Forward based on rotation
+            car.translateZ(speed);
+
+            // Camera Follow Logic (Smooth)
+            const relativeCameraOffset = new THREE.Vector3(0, 3, -6); // Behind car
+            const cameraOffset = relativeCameraOffset.applyMatrix4(car.matrixWorld);
+            
+            camera.position.lerp(cameraOffset, 0.1); // Smooth follow
+            camera.lookAt(car.position);
+
+            document.getElementById('speed-display').innerText = Math.floor(speed * 100);
+
+            renderer.render(scene, camera);
+        }
+
+        // Start everything
+        initThreeJS();
+        initHandTracking();
+        animate();
+        
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>
